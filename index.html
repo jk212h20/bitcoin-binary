@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitcoin Price in Binary</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            background: #000;
+            padding: 1.5rem;
+            max-width: 900px;
+            width: 100%;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end;
+            box-sizing: border-box;
+            position: relative;
+        }
+
+        .binary-list {
+            font-family: 'Courier New', monospace;
+            font-size: 1.8rem;
+            text-align: center;
+            word-wrap: break-word;
+            color: #00ff00;
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+            min-height: 0;
+            margin-bottom: 15vh;
+        }
+
+        .binary-price {
+            transition: opacity 0.3s ease;
+            line-height: 1.2;
+            letter-spacing: 2px;
+        }
+
+        .binary-price.gold {
+            color: #ffd700;
+        }
+
+        .binary-price.fade-in {
+            opacity: 0;
+        }
+
+        .timestamp {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            color: #333;
+            font-size: 0.7rem;
+            font-family: monospace;
+        }
+
+        .error {
+            color: #ff4444;
+            text-align: center;
+            display: none;
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 0.8rem;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+
+        .status {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #00ff00;
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            opacity: 0.5;
+        }
+
+        @media (max-width: 480px) {
+            .binary-list {
+                font-size: 1.2rem;
+                letter-spacing: 1px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="status" id="status"></div>
+    <div class="container">
+        <div class="binary-list" id="binary-list"></div>
+        <div class="timestamp" id="timestamp">00:00:00</div>
+    </div>
+    <div class="error" id="error"></div>
+
+    <script>
+        function toBinary(price) {
+            const intPrice = Math.round(price);
+            return intPrice.toString(2);
+        }
+
+        function getSecondsAfterMidnight() {
+            const now = new Date();
+            return now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+        }
+
+        function secondsToBinary(seconds) {
+            return seconds.toString(2).padStart(17, '0');
+        }
+
+        function updateTimestamp() {
+            const now = new Date();
+            document.getElementById('timestamp').textContent = 
+                now.toLocaleTimeString();
+            return now;
+        }
+
+        function showError(message) {
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = message;
+            errorEl.style.display = 'block';
+            document.getElementById('status').style.background = '#ff4444';
+        }
+
+        function clearError() {
+            document.getElementById('error').style.display = 'none';
+            document.getElementById('status').style.background = '#00ff00';
+        }
+
+        let lastPrice = null;
+        const priceHistory = [];
+        const MAX_HISTORY = 20;
+
+        function addPriceToHistory(price, binaryTime) {
+            const listEl = document.getElementById('binary-list');
+            const binaryPrice = toBinary(price);
+            
+            // Create new price element
+            const priceEl = document.createElement('div');
+            priceEl.className = 'binary-price fade-in';
+            
+            // Check if binary time ends with 00000
+            if (binaryTime.endsWith('00000')) {
+                priceEl.classList.add('gold');
+            }
+            
+            priceEl.textContent = `${binaryPrice} @ ${binaryTime}`;
+            
+            // Add to DOM at the end (bottom)
+            listEl.appendChild(priceEl);
+            
+            // Set opacity based on position (newer items are brighter)
+            const items = listEl.children;
+            for (let i = 0; i < items.length; i++) {
+                const opacity = 1 - ((items.length - 1 - i) * (0.8 / MAX_HISTORY));
+                items[i].style.opacity = Math.max(0.2, opacity);
+            }
+            
+            // Trigger reflow
+            priceEl.offsetHeight;
+            
+            // Remove fade-in class to trigger animation
+            requestAnimationFrame(() => {
+                priceEl.classList.remove('fade-in');
+            });
+            
+            // Add to history array
+            priceHistory.push(binaryPrice);
+            
+            // Remove old prices if exceeding MAX_HISTORY
+            while (priceHistory.length > MAX_HISTORY) {
+                priceHistory.shift();
+                if (listEl.firstChild) {
+                    listEl.removeChild(listEl.firstChild);
+                }
+            }
+        }
+
+        let activeRequest = null;
+
+        async function updatePrice() {
+            // Cancel previous request if it exists
+            if (activeRequest) {
+                activeRequest.abort();
+            }
+
+            // Create new abort controller for this request
+            const abortController = new AbortController();
+            activeRequest = abortController;
+
+            try {
+                const response = await fetch('/api/price', {
+                    signal: abortController.signal,
+                    cache: 'no-store',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Server error');
+                }
+                
+                const data = await response.json();
+                
+                if (!data.price && data.price !== 0) {
+                    throw new Error('Invalid price data');
+                }
+
+                if (data.price !== lastPrice) {
+                    lastPrice = data.price;
+                    const seconds = getSecondsAfterMidnight();
+                    const binaryTime = secondsToBinary(seconds);
+                    addPriceToHistory(data.price, binaryTime);
+                    updateTimestamp();
+                }
+                clearError();
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    showError(`Failed to update price: ${error.message}`);
+                }
+            } finally {
+                if (activeRequest === abortController) {
+                    activeRequest = null;
+                }
+            }
+        }
+
+        // Initial update
+        updatePrice();
+
+        // Update every 100ms
+        setInterval(updatePrice, 100);
+    </script>
+</body>
+</html>
